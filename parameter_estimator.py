@@ -1,6 +1,21 @@
 import casadi as ca
 import numpy as np
 from typing import Callable, Dict, Sequence, Any, Optional
+from dataclasses import dataclass
+
+
+@dataclass
+class CNLLSProblem:
+    # {'f': ..., 'x': ..., 'g': ...}
+    prob: Dict[str, ca.MX]
+
+    x0: np.ndarray
+    lbx: np.ndarray
+    ubx: np.ndarray
+
+    lbg: np.ndarray
+    ubg: np.ndarray
+
 
 class ParameterEstimator:
     def __init__(
@@ -29,9 +44,10 @@ class ParameterEstimator:
             residual: function to compute residual from error vector.
             options: dict of solver options.
         """
-        assert "x" in DAE and "p" in DAE and "ode" in DAE, \
-            "DAE dictionary must contain 'x', 'p', and 'ode'"
-        assert len(t_meas) == x_meas.shape[0], "t_meas and x_meas must match in length"
+        if {"x", "p", "ode"} - set(DAE):
+            raise ValueError("DAE dictionary must contain keys 'x', 'p', and 'ode'.")
+        if len(t_meas) != x_meas.shape[0]:
+            raise ValueError("t_meas and x_meas must match in length.")
 
         self.DAE = DAE
         self.t_meas = list(t_meas)
@@ -41,21 +57,21 @@ class ParameterEstimator:
         # Merge user options with defaults
         opts = options or {}
         self.options = {
-            'integrator': opts.get('integrator', {}),
-            'ipopt': opts.get('ipopt', {'print_level': 0}),
-            'gn': opts.get('gn', {})
+            "integrator": opts.get("integrator", {}),
+            "ipopt": opts.get("ipopt", {"print_level": 0}),
+            "gn": opts.get("gn", {}),
         }
 
-        self.n_p = len(self.DAE['p'])
+        self.n_p = len(self.DAE["p"])
         self.p_init = np.zeros(self.n_p) if p_init is None else np.array(p_init)
         self.p_lb = -np.inf * np.ones(self.n_p) if p_lb is None else np.array(p_lb)
-        self.p_ub =  np.inf * np.ones(self.n_p) if p_ub is None else np.array(p_ub)
+        self.p_ub = np.inf * np.ones(self.n_p) if p_ub is None else np.array(p_ub)
 
-        self._cnlls = None
+        self.cnlls = CNLLSProblem()
         self._build_cnlls()
 
     def _build_cnlls(self) -> None:
-        # multiple shooting
+        # TODO: multiple shooting
         pass
 
     def solve(self, strategy: str = "ipopt") -> Dict[str, Any]:
@@ -67,8 +83,17 @@ class ParameterEstimator:
             raise ValueError(f"Unknown strategy: {strategy}")
 
     def _solve_ipopt(self) -> Dict[str, Any]:
-        pass
+        solver = ca.nlpsol("solver", "ipopt", self.cnlls.prob, self.options["ipopt"])
+        sol = solver(
+            x0=self.cnlls.x0,
+            lbx=self.cnlls.lbx,
+            ubx=self.cnlls.ubx,
+            lbg=self.cnlls.lbg,
+            ubg=self.cnlls.ubg,
+        )
+        # TODO: may be necessary to split p from other
+        return sol
 
     def _solve_gn(self) -> Dict[str, Any]:
+        # TODO: generalized Gauß-Newton method
         pass
-
