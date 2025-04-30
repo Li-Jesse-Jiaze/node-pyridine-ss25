@@ -58,7 +58,7 @@ class ParameterEstimator:
         opts = options or {}
         self.options = {
             "integrator": opts.get("integrator", {}),
-            "ipopt": opts.get("ipopt", {"print_level": 0}),
+            "ipopt": {f"ipopt.{k}": v for k, v in opts.get("ipopt", {"print_level": 0}).items()},
             "gn": opts.get("gn", {}),
         }
 
@@ -139,7 +139,7 @@ class ParameterEstimator:
             raise ValueError(f"Unknown strategy: {strategy}")
 
     def _solve_ipopt(self) -> Dict[str, Any]:
-        solver = ca.nlpsol("solver", "ipopt", self.cnlls.prob, {f"ipopt.{k}": v for k, v in self.options.get("ipopt", {}).items()})
+        solver = ca.nlpsol("solver", "ipopt", self.cnlls.prob, self.options["ipopt"])
         sol = solver(
             x0=self.cnlls.x0,
             lbx=self.cnlls.lbx,
