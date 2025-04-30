@@ -58,21 +58,77 @@ class ParameterEstimator:
         opts = options or {}
         self.options = {
             "integrator": opts.get("integrator", {}),
-            "ipopt": opts.get("ipopt", {"print_level": 0}),
+            "ipopt": {f"ipopt.{k}": v for k, v in opts.get("ipopt", {"print_level": 0}).items()},
             "gn": opts.get("gn", {}),
         }
 
-        self.n_p = len(self.DAE["p"])
+        self.n_p = int(DAE["p"].size1())
         self.p_init = np.zeros(self.n_p) if p_init is None else np.array(p_init)
         self.p_lb = -np.inf * np.ones(self.n_p) if p_lb is None else np.array(p_lb)
         self.p_ub = np.inf * np.ones(self.n_p) if p_ub is None else np.array(p_ub)
 
-        self.cnlls = CNLLSProblem()
+        self.cnlls = None
         self._build_cnlls()
 
     def _build_cnlls(self) -> None:
-        # TODO: multiple shooting
-        pass
+        """Build the CNLLS using direct multiple-shooting.
+
+        Simplifying assumptions:
+            • g ≡ 0
+            • r_2, r_3 ≡ 0
+            • m = N - 1
+        """
+        # -- 1. basic dimensions --------------------------------------------
+        nx = int(self.DAE["x"].size1())
+        N = len(self.t_meas)
+        dt = np.diff(self.t_meas).astype(float)
+
+        # -- 2. integrator --------------------------------------------------
+        integrators = []
+        for k, h in enumerate(dt):
+            F_k = ca.integrator(
+                f"F_seg_{k}",
+                "cvodes",
+                self.DAE,
+                0.0,
+                float(h),
+                self.options.get("integrator", {}),
+            )
+            integrators.append(F_k)
+
+        # -- 3. decision variables ------------------------------------------
+        X = [ca.MX.sym(f"X_{k}", nx) for k in range(N)]
+        P = ca.MX.sym("P", self.n_p)
+        w = ca.vertcat(*(X + [P]))
+
+        # -- 4. continuity constraints --------------------------------------
+        defects = []
+        for k in range(N - 1):
+            x_end = integrators[k](x0=X[k], p=P)["xf"]
+            defects.append(X[k + 1] - x_end)
+        g = ca.vertcat(*defects) if defects else ca.MX()
+
+        # -- 5. residual vector & objective ---------------------------------
+        R = ca.vertcat(*[X[k] - self.x_meas[k] for k in range(N)])
+        J = self.residual(R)
+
+        # -- 6. initial guess & variable bounds -----------------------------
+        x0 = np.concatenate([self.x_meas[k] for k in range(N)] + [self.p_init])
+        lbx = np.concatenate([np.full(nx, -np.inf) for _ in range(N)] + [self.p_lb])
+        ubx = np.concatenate([np.full(nx, np.inf) for _ in range(N)] + [self.p_ub])
+
+        lbg = np.zeros(g.shape) if g.numel() else np.array([])
+        ubg = np.zeros_like(lbg)
+
+        # -- 7. pack CNLLS --------------------------------------------------
+        self.cnlls = CNLLSProblem(
+            prob={"f": J, "x": w, "g": g},
+            x0=x0,
+            lbx=lbx,
+            ubx=ubx,
+            lbg=lbg,
+            ubg=ubg,
+        )
 
     def solve(self, strategy: str = "ipopt") -> Dict[str, Any]:
         if strategy == "ipopt":
