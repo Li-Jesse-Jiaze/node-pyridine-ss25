@@ -178,3 +178,5 @@ cython_debug/
 
 # Outputs
 *.png
+*.svg
+*.ipynb
