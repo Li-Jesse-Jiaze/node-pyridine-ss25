@@ -86,13 +86,13 @@ def generate_data(F: ca.Function, t_grid: np.ndarray, x0: np.ndarray,
 
 def estimate_p(dae: dict, t_grid: np.ndarray, meas: np.ndarray,
                p_init: List[float], p_lb: List[float], p_ub: List[float],
-               ipopt_opts: dict = None) -> np.ndarray:
+               ipopt_opts: dict = None, strategy: str = "ipopt") -> np.ndarray:
     est = ParameterEstimator(
         dae, t_meas=t_grid, x_meas=meas,
         p_init=p_init, p_lb=p_lb, p_ub=p_ub,
         options={'ipopt': ipopt_opts or {}}
     )
-    sol = est.solve()
+    sol = est.solve(strategy)
     return sol['x'][-len(p_init):].full().ravel()
 
 
@@ -125,6 +125,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', choices=MODELS.keys(), default='lv',
                         help='lv or pyridine')
+    parser.add_argument('--strategy', choices=['ipopt', 'gn'], default='ipopt',
+                        help='parameter estimation strategy: ipopt (default) or gn')
     args = parser.parse_args()
 
     cfg = MODELS[args.model]
@@ -135,7 +137,7 @@ def main():
     X_true, X_meas = generate_data(F, t_grid, cfg.x0, cfg.true_p)
     p_hat = estimate_p(dae, t_grid, X_meas,
                        cfg.p_init, cfg.p_lb, cfg.p_ub,
-                       ipopt_opts={'print_level': 0})
+                       ipopt_opts={'print_level': 0}, strategy=args.strategy)
     print(f"[{cfg.name}] Estimated parameters: {np.round(p_hat, 4)}")
 
     X_est = simulate(F, t_grid, cfg.x0, p_hat)
