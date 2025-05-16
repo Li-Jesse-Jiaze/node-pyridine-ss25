@@ -3,6 +3,8 @@ from typing import Callable, Dict, Sequence, Any, Optional
 import casadi as ca
 import numpy as np
 
+from utils import silence
+
 class ParameterEstimator:
     def __init__(
         self,
@@ -81,9 +83,15 @@ class ParameterEstimator:
             self.with_jit = True
             self.compiler = "shell"
         else:
-            print("WARNING: running without JIT, might be slow")
+            print("\033[33mWARNING: running without JIT, might be slow\033[0m")
             self.with_jit = False
             self.compiler = ""
+        
+        if ca.Linsol.has_plugin("ma27"):
+            self.schur = True
+        else:
+            self.schur = False
+            print("\033[33mWARNING: running without HSL, might be slow\033[0m")
 
         # Placeholders (will be filled by _build_cnlls)
         self.x0 = None
@@ -99,7 +107,7 @@ class ParameterEstimator:
             • r_2, r_3 ≡ 0
         """
         # Pre‑compute the time increments between successive measurements
-        dt_meas = np.diff(self.t_meas).astype(float) # N‑1
+        dt_meas = np.diff(self.t_meas).astype(float)  # N‑1
         DT = ca.DM(dt_meas)
 
         # one‑step RK4 integrator
@@ -120,7 +128,9 @@ class ParameterEstimator:
 
         # Map the integrator in parallel over all *N‑1* sampling intervals
         f_map = one_step_dt.map(self.N - 1, "thread")
-        Pmat = ca.repmat(self.params, 1, self.N - 1)  # broadcast parameters along columns
+        Pmat = ca.repmat(
+            self.params, 1, self.N - 1
+        )  # broadcast parameters along columns
         if self.less_node:
             # measurement index → shooting node index
             idx_nodes = np.linspace(0, self.N - 1, self.num_shooting, dtype=int)
@@ -149,7 +159,7 @@ class ParameterEstimator:
             # Defect constraints (“gaps”): enforce continuity at shooting nodes
             gap_list = []
             for s in range(self.num_shooting - 1):
-                k_end = int(idx_nodes[s + 1]) # last interval that ends at node s+1
+                k_end = int(idx_nodes[s + 1])  # last interval that ends at node s+1
                 gap_list.append(X_pred[:, k_end - 1] - Xv[:, s + 1])
             gaps = ca.hcat(gap_list)
             X_guess = ca.DM(self.x_meas[idx_nodes, :]).T
@@ -162,8 +172,8 @@ class ParameterEstimator:
 
         errors = ca.vec(ca.DM(self.x_meas[1:, :]).T - X_pred)
 
-        self.errors = errors # flat 1D
-        self.variables = variables # flat 1D
+        self.errors = errors  # flat 1D
+        self.variables = variables  # flat 1D
 
         self.cnlls = {"x": variables, "f": self.residual(errors), "g": ca.vec(gaps)}
         self.x0 = ca.veccat(self.p_init, X_guess)
@@ -179,7 +189,13 @@ class ParameterEstimator:
             raise ValueError(f"Unknown strategy: {strategy}")
 
     def _solve_ipopt(self) -> Dict[str, Any]:
-        solver = ca.nlpsol("solver", "ipopt", self.cnlls)
+        options = dict()
+        # # Faster without
+        # options["jit"] = self.with_jit
+        # options["compiler"] = self.compiler
+        # if self.schur:
+        #     options["ipopt.linear_solver"] = "ma27"
+        solver = ca.nlpsol("solver", "ipopt", self.cnlls, options)
         sol = solver(x0=self.x0, lbg=0, ubg=0)
         return sol
 
@@ -196,8 +212,15 @@ class ParameterEstimator:
             ["hess_gamma_x_x"],
             dict(jit=self.with_jit, compiler=self.compiler),
         )
+        options = {"hess_lag": hessLag, "jit": self.with_jit, "compiler": self.compiler}
+        # # Faster if not using Schur, why?
+        # if self.schur:
+        #     options["ipopt.linear_solver"] = "ma27"
         solver = ca.nlpsol(
-            "solver", "ipopt", self.cnlls, dict(hess_lag=hessLag, jit=self.with_jit, compiler=self.compiler)
+            "solver",
+            "ipopt",
+            self.cnlls,
+            options,
         )
         return solver(x0=self.x0, lbg=0, ubg=0)
 
@@ -209,22 +232,23 @@ class ParameterEstimator:
         f_sym = self.cnlls["f"]
         g_sym = self.cnlls["g"]
         lbw = -np.inf * ca.DM(np.ones_like(self.x0).reshape((-1, 1)))
-        ubw =  np.inf * ca.DM(np.ones_like(self.x0).reshape((-1, 1)))
+        ubw = np.inf * ca.DM(np.ones_like(self.x0).reshape((-1, 1)))
 
-        nvar  = w_sym.numel()
+        nvar = w_sym.numel()
         ncons = g_sym.numel()
 
         # Functions for residuals, constraints, Jacobians
         R_sym = self.errors
-        R_fun = ca.Function('R_fun', [w_sym],[R_sym])
-        g_fun = ca.Function('g_fun', [w_sym],[g_sym])
-        f_fun = ca.Function('f_fun', [w_sym],[f_sym])
+        R_fun = ca.Function("R_fun", [w_sym], [R_sym])
+        g_fun = ca.Function("g_fun", [w_sym], [g_sym])
+        f_fun = ca.Function("f_fun", [w_sym], [f_sym])
 
         JR_sym = ca.jacobian(R_sym, w_sym)
         JG_sym = ca.jacobian(g_sym, w_sym)
-        JR_fun = ca.Function('JR_fun',[w_sym],[JR_sym])
-        JG_fun = ca.Function('JG_fun',[w_sym],[JG_sym])
+        JR_fun = ca.Function("JR_fun", [w_sym], [JR_sym])
+        JG_fun = ca.Function("JG_fun", [w_sym], [JG_sym])
 
+        @silence
         def solve_qp(H_, g_, A_, lbA_, ubA_, lbx_, ubx_):
             """
             min 0.5 dw^T H_ dw + g_^T dw
@@ -236,42 +260,42 @@ class ParameterEstimator:
             obj = 0.5 * ca.mtimes([dw.T, H_, dw]) + ca.dot(g_, dw)
             lhs = ca.mtimes(A_, dw) if A_.shape[0] else ca.DM.zeros((0, 1))
 
-            qp_dict = {'x': dw, 'f': obj, 'g': lhs}
-            solver = ca.qpsol("tmp_qp", "qpoases", qp_dict, {"printLevel":"none"})
+            qp_dict = {"x": dw, "f": obj, "g": lhs}
+            solver = ca.qpsol("tmp_qp", "qpoases", qp_dict, {'printLevel': 'none', 'sparse': True, 'schur': self.schur})
             sol = solver(lbg=lbA_, ubg=ubA_, lbx=lbx_, ubx=ubx_)
-            return sol['x'].full().ravel()
+            return sol["x"].full().ravel()
 
         # Gauss–Newton loop
         max_iter = self.options.get("max_iter", 20)
-        tol      = self.options.get("tol", 1e-12)
+        tol = self.options.get("tol", 1e-12)
         w = ca.DM(self.x0)
 
+        last_norm_R = np.inf
         for it in range(max_iter):
             # evaluate residuals / constraints
             R_val = np.array(R_fun(w)).ravel()
-            G_val = np.array(g_fun(w)).ravel() if ncons>0 else np.array([])
+            G_val = np.array(g_fun(w)).ravel() if ncons > 0 else np.array([])
             f_val = float(f_fun(w))
 
-            last_norm_R = norm_R if it > 0 else np.inf
-            norm_R = np.linalg.norm(R_val,2)
-            norm_G = np.linalg.norm(G_val,np.inf) if G_val.size>0 else 0.0
+            norm_R = np.linalg.norm(R_val, 2)
+            norm_G = np.linalg.norm(G_val, np.inf) if G_val.size > 0 else 0.0
 
             # Convergence test
             if last_norm_R - norm_R < tol and norm_G < tol:
                 print(f"[gn] Converged at iter={it}, f={f_val:.3e}")
                 break
-            
+
             # build GN system  H = JᵀJ , g = Jᵀr
             JR = JR_fun(w)
             H = ca.mtimes(ca.transpose(JR), JR)
             g = ca.mtimes(ca.transpose(JR), R_val)
 
             # assemble QP matrices
-            if ncons>0:
+            if ncons > 0:
                 A = JG_fun(w)
                 lbA_dm = ubA_dm = ca.DM(-G_val.reshape((-1, 1)))
             else:
-                A = ca.DM.zeros((0,nvar))
+                A = ca.DM.zeros((0, nvar))
                 lbA_dm = ubA_dm = ca.DM.zeros((0, 1))
 
             # solve the QP for search direction
@@ -292,12 +316,16 @@ class ParameterEstimator:
                     break
             else:
                 w = w + dw
-        
+
+            last_norm_R = norm_R
+
         # pack & return solution
-        G_final = np.array(g_fun(w)).ravel() if ncons>0 else np.array([])
+        G_final = np.array(g_fun(w)).ravel() if ncons > 0 else np.array([])
         sol = {
             "x": ca.DM(w),
             "f": float(f_fun(w)),
-            "g": ca.DM(G_final.reshape((-1,1))) if G_final.size>0 else ca.DM.zeros((0,1)),
+            "g": ca.DM(G_final.reshape((-1, 1)))
+            if G_final.size > 0
+            else ca.DM.zeros((0, 1)),
         }
         return sol
