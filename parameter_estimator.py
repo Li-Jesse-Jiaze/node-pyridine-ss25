@@ -1,33 +1,21 @@
+from typing import Callable, Dict, Sequence, Any, Optional
+
 import casadi as ca
 import numpy as np
-from typing import Callable, Dict, Sequence, Any, Optional
-from dataclasses import dataclass
 
-
-@dataclass
-class CNLLSProblem:
-    # {'f': ..., 'x': ..., 'g': ...}
-    prob: Dict[str, ca.MX]
-
-    x0: np.ndarray
-    lbx: np.ndarray
-    ubx: np.ndarray
-
-    lbg: np.ndarray
-    ubg: np.ndarray
-
+from utils import silence
 
 class ParameterEstimator:
     def __init__(
         self,
-        DAE: Dict[str, ca.MX],
+        ode: ca.Function,
+        states: ca.MX,
+        params: ca.MX,
         t_meas: Sequence[float],
         x_meas: np.ndarray,
         num_shooting: Optional[int] = None,
         p_init: Optional[Sequence[float]] = None,
-        p_lb: Optional[Sequence[float]] = None,
-        p_ub: Optional[Sequence[float]] = None,
-        residual: Callable[[ca.MX], ca.MX] = ca.sumsqr,
+        residual: Callable[[ca.MX], ca.MX] = lambda e: 0.5 * ca.dot(e, e),
         options: Optional[Dict[str, Any]] = None,
     ) -> None:
         """
@@ -44,30 +32,71 @@ class ParameterEstimator:
             residual: function to compute residual from error vector.
             options: dict of solver options.
         """
-        if {"x", "p", "ode"} - set(DAE):
-            raise ValueError("DAE dictionary must contain keys 'x', 'p', and 'ode'.")
         if len(t_meas) != x_meas.shape[0]:
-            raise ValueError("t_meas and x_meas must match in length.")
+            raise ValueError("t_meas and x_meas have to be the same size.")
 
-        self.DAE = DAE
+        self.ode = ode
+        self.states = states
+        self.params = params
         self.t_meas = list(t_meas)
         self.x_meas = x_meas
-        self.num_shooting = num_shooting or (len(self.t_meas) - 1)
+        self.N = len(self.t_meas)  # number of measurement instants
+
+        # Default to one shooting node per measurement unless user overrides
+        self.num_shooting = self.N if num_shooting is None else int(num_shooting)
+
+        if self.num_shooting > self.N:
+            print(
+                f"\033[33mWARNING: num_shooting={self.num_shooting} > #measurements={self.N};"
+                "falling back to one node per measurement.\033[0m"
+            )
+            self.num_shooting = self.N
+
+        self.less_node = self.num_shooting < self.N
+        if self.less_node:
+            print(
+                f"\033[33mWARNING: num_shooting={self.num_shooting} < #measurements={self.N}; "
+                "estimation accuracy may degrade.\033[0m"
+            )
         self.residual = residual
+
         # Merge user options with defaults
         opts = options or {}
         self.options = {
-            "integrator": opts.get("integrator", {}),
-            "ipopt": {f"ipopt.{k}": v for k, v in opts.get("ipopt", {"print_level": 0}).items()},
+            "ipopt": {
+                f"ipopt.{k}": v
+                for k, v in opts.get("ipopt", {"print_level": 0}).items()
+            },
             "gn": opts.get("gn", {}),
         }
-
-        self.n_p = int(DAE["p"].size1())
+        # Model dimensions
+        self.n_x = int(states.size1())
+        self.n_p = int(params.size1())
+        # Parameter initial guess
         self.p_init = np.zeros(self.n_p) if p_init is None else np.array(p_init)
-        self.p_lb = -np.inf * np.ones(self.n_p) if p_lb is None else np.array(p_lb)
-        self.p_ub = np.inf * np.ones(self.n_p) if p_ub is None else np.array(p_ub)
 
-        self.cnlls = None
+        # JIT compilation backend (greatly speeds up Jacobians/Hessians)
+        if ca.Importer.has_plugin("clang"):
+            self.with_jit = True
+            self.compiler = "clang"
+        elif ca.Importer.has_plugin("shell"):
+            self.with_jit = True
+            self.compiler = "shell"
+        else:
+            print("\033[33mWARNING: running without JIT, might be slow\033[0m")
+            self.with_jit = False
+            self.compiler = ""
+        
+        if ca.Linsol.has_plugin("ma27"):
+            self.schur = True
+        else:
+            self.schur = False
+            print("\033[33mWARNING: running without HSL, might be slow\033[0m")
+
+        # Placeholders (will be filled by _build_cnlls)
+        self.x0 = None
+        self.cnlls = {"f": None, "x": None, "g": None}  # with g ≡ 0
+
         self._build_cnlls()
 
     def _build_cnlls(self) -> None:
@@ -76,62 +105,83 @@ class ParameterEstimator:
         Simplifying assumptions:
             • g ≡ 0
             • r_2, r_3 ≡ 0
-            • m = N - 1
         """
-        # -- 1. basic dimensions --------------------------------------------
-        nx = int(self.DAE["x"].size1())
-        N = len(self.t_meas)
-        dt = np.diff(self.t_meas).astype(float)
+        # Pre‑compute the time increments between successive measurements
+        dt_meas = np.diff(self.t_meas).astype(float)  # N‑1
+        DT = ca.DM(dt_meas)
 
-        # -- 2. integrator --------------------------------------------------
-        integrators = []
-        for k, h in enumerate(dt):
-            F_k = ca.integrator(
-                f"F_seg_{k}",
-                "cvodes",
-                self.DAE,
-                0.0,
-                float(h),
-                self.options.get("integrator", {}),
-            )
-            integrators.append(F_k)
+        # one‑step RK4 integrator
+        dt = ca.MX.sym("dt")
+        k1 = self.ode(self.states, self.params)
+        k2 = self.ode(self.states + dt / 2 * k1, self.params)
+        k3 = self.ode(self.states + dt / 2 * k2, self.params)
+        k4 = self.ode(self.states + dt * k3, self.params)
 
-        # -- 3. decision variables ------------------------------------------
-        X = [ca.MX.sym(f"X_{k}", nx) for k in range(N)]
-        P = ca.MX.sym("P", self.n_p)
-        w = ca.vertcat(*(X + [P]))
-
-        # -- 4. continuity constraints --------------------------------------
-        defects = []
-        for k in range(N - 1):
-            x_end = integrators[k](x0=X[k], p=P)["xf"]
-            defects.append(X[k + 1] - x_end)
-        g = ca.vertcat(*defects) if defects else ca.MX()
-
-        # -- 5. residual vector & objective ---------------------------------
-        R = ca.vertcat(*[X[k] - self.x_meas[k] for k in range(N)])
-        J = self.residual(R)
-
-        # -- 6. initial guess & variable bounds -----------------------------
-        x0 = np.concatenate([self.x_meas[k] for k in range(N)] + [self.p_init])
-        lbx = np.concatenate([np.full(nx, -np.inf) for _ in range(N)] + [self.p_lb])
-        ubx = np.concatenate([np.full(nx, np.inf) for _ in range(N)] + [self.p_ub])
-
-        lbg = np.zeros(g.shape) if g.numel() else np.array([])
-        ubg = np.zeros_like(lbg)
-
-        # -- 7. pack CNLLS --------------------------------------------------
-        self.cnlls = CNLLSProblem(
-            prob={"f": J, "x": w, "g": g},
-            x0=x0,
-            lbx=lbx,
-            ubx=ubx,
-            lbg=lbg,
-            ubg=ubg,
+        states_next = self.states + dt / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
+        one_step_dt = ca.Function(
+            "one_step_dt", [self.states, self.params, dt], [states_next]
         )
 
-    def solve(self, strategy: str = "ipopt") -> Dict[str, Any]:
-        if strategy == "ipopt":
+        # Decision variables
+        Xv = ca.MX.sym("X", self.n_x, self.num_shooting)
+        variables = ca.veccat(self.params, Xv)
+
+        # Map the integrator in parallel over all *N‑1* sampling intervals
+        f_map = one_step_dt.map(self.N - 1, "thread")
+        Pmat = ca.repmat(
+            self.params, 1, self.N - 1
+        )  # broadcast parameters along columns
+        if self.less_node:
+            # measurement index → shooting node index
+            idx_nodes = np.linspace(0, self.N - 1, self.num_shooting, dtype=int)
+            # maps each step (interval) to the *shooting node* it belongs to
+            idx_steps = np.searchsorted(
+                idx_nodes[1:], np.arange(self.N - 1), side="right"
+            )
+            IDX_STEPS_DM = ca.DM(idx_steps.tolist())
+            # Gather the shooting states corresponding to each step
+            X0_steps = Xv[:, IDX_STEPS_DM]
+            # Compute *per‑step* integration horizons (could be >1 Δt if we skipped nodes)
+            C = ca.DM.zeros(IDX_STEPS_DM.numel())
+            cum = 0.0
+
+            for i in range(IDX_STEPS_DM.numel()):
+                cum = (
+                    (cum + DT[i])
+                    if (i and IDX_STEPS_DM[i] == IDX_STEPS_DM[i - 1])
+                    else DT[i]
+                )
+                C[i] = cum
+
+            # Predict the states at measurement points
+            X_pred = f_map(X0_steps, Pmat, C)
+
+            # Defect constraints (“gaps”): enforce continuity at shooting nodes
+            gap_list = []
+            for s in range(self.num_shooting - 1):
+                k_end = int(idx_nodes[s + 1])  # last interval that ends at node s+1
+                gap_list.append(X_pred[:, k_end - 1] - Xv[:, s + 1])
+            gaps = ca.hcat(gap_list)
+            X_guess = ca.DM(self.x_meas[idx_nodes, :]).T
+        else:
+            X_pred = f_map(
+                Xv[:, :-1], Pmat, ca.reshape(DT, 1, self.N - 1)
+            )  # (n_p × N-1)
+            gaps = X_pred - Xv[:, 1:]
+            X_guess = ca.DM(self.x_meas).T
+
+        errors = ca.vec(ca.DM(self.x_meas[1:, :]).T - X_pred)
+
+        self.errors = errors  # flat 1D
+        self.variables = variables  # flat 1D
+
+        self.cnlls = {"x": variables, "f": self.residual(errors), "g": ca.vec(gaps)}
+        self.x0 = ca.veccat(self.p_init, X_guess)
+
+    def solve(self, strategy: str = "gn_fast") -> Dict[str, Any]:
+        if strategy == "gn_fast":
+            return self._solve_gn_fast()
+        elif strategy == "ipopt":
             return self._solve_ipopt()
         elif strategy == "gn":
             return self._solve_gn()
@@ -139,52 +189,66 @@ class ParameterEstimator:
             raise ValueError(f"Unknown strategy: {strategy}")
 
     def _solve_ipopt(self) -> Dict[str, Any]:
-        solver = ca.nlpsol("solver", "ipopt", self.cnlls.prob, self.options["ipopt"])
-        sol = solver(
-            x0=self.cnlls.x0,
-            lbx=self.cnlls.lbx,
-            ubx=self.cnlls.ubx,
-            lbg=self.cnlls.lbg,
-            ubg=self.cnlls.ubg,
-        )
-        # TODO: may be necessary to split p from other
+        options = dict()
+        # # Faster without
+        # options["jit"] = self.with_jit
+        # options["compiler"] = self.compiler
+        # if self.schur:
+        #     options["ipopt.linear_solver"] = "ma27"
+        solver = ca.nlpsol("solver", "ipopt", self.cnlls, options)
+        sol = solver(x0=self.x0, lbg=0, ubg=0)
         return sol
 
-    def _solve_gn(self) -> Dict[str, Any]:
-        w_sym = self.cnlls.prob["x"]
-        f_sym = self.cnlls.prob["f"]
-        g_sym = self.cnlls.prob["g"]
-        w0    = self.cnlls.x0.copy()
-        lbw   = self.cnlls.lbx
-        ubw   = self.cnlls.ubx
+    def _solve_gn_fast(self) -> Dict[str, Any]:
+        # Jacobian of residuals wrt *all* decision vars
+        J = ca.jacobian(self.errors, self.variables)
+        # Upper‑triangular part of JTJ
+        H = ca.triu(ca.mtimes(J.T, J))
+        sigma = ca.MX.sym("sigma")
+        hessLag = ca.Function(
+            "nlp_hess_l",
+            {"x": self.variables, "lam_f": sigma, "hess_gamma_x_x": sigma * H},
+            ["x", "p", "lam_f", "lam_g"],
+            ["hess_gamma_x_x"],
+            dict(jit=self.with_jit, compiler=self.compiler),
+        )
+        options = {"hess_lag": hessLag, "jit": self.with_jit, "compiler": self.compiler}
+        # # Faster if not using Schur, why?
+        # if self.schur:
+        #     options["ipopt.linear_solver"] = "ma27"
+        solver = ca.nlpsol(
+            "solver",
+            "ipopt",
+            self.cnlls,
+            options,
+        )
+        return solver(x0=self.x0, lbg=0, ubg=0)
 
-        nvar  = w_sym.numel()
+    def _solve_gn(self) -> Dict[str, Any]:
+        """
+        Gauss-Newton solver (with simple back-tracking line-search).
+        """
+        w_sym = self.cnlls["x"]
+        f_sym = self.cnlls["f"]
+        g_sym = self.cnlls["g"]
+        lbw = -np.inf * ca.DM(np.ones_like(self.x0).reshape((-1, 1)))
+        ubw = np.inf * ca.DM(np.ones_like(self.x0).reshape((-1, 1)))
+
+        nvar = w_sym.numel()
         ncons = g_sym.numel()
 
-        N  = len(self.t_meas)
-        nx = int(self.DAE["x"].size1())
-
-        offset = 0
-        X_blocks = []
-        for k in range(N):
-            Xk = w_sym[offset : offset+nx]
-            X_blocks.append(Xk)
-            offset += nx
-
-        R_list = []
-        for k in range(N):
-            R_list.append(X_blocks[k] - self.x_meas[k])
-        R_sym = ca.vertcat(*R_list)
-
-        R_fun = ca.Function('R_fun', [w_sym],[R_sym])
-        g_fun = ca.Function('g_fun', [w_sym],[g_sym])
-        f_fun = ca.Function('f_fun', [w_sym],[f_sym])
+        # Functions for residuals, constraints, Jacobians
+        R_sym = self.errors
+        R_fun = ca.Function("R_fun", [w_sym], [R_sym])
+        g_fun = ca.Function("g_fun", [w_sym], [g_sym])
+        f_fun = ca.Function("f_fun", [w_sym], [f_sym])
 
         JR_sym = ca.jacobian(R_sym, w_sym)
         JG_sym = ca.jacobian(g_sym, w_sym)
-        JR_fun = ca.Function('JR_fun',[w_sym],[JR_sym])
-        JG_fun = ca.Function('JG_fun',[w_sym],[JG_sym])
+        JR_fun = ca.Function("JR_fun", [w_sym], [JR_sym])
+        JG_fun = ca.Function("JG_fun", [w_sym], [JG_sym])
 
+        @silence
         def solve_qp(H_, g_, A_, lbA_, ubA_, lbx_, ubx_):
             """
             min 0.5 dw^T H_ dw + g_^T dw
@@ -193,99 +257,75 @@ class ParameterEstimator:
             n_ = H_.shape[0]
             dw = ca.MX.sym("dw", n_, 1)
 
-            obj = 0.5*ca.mtimes([dw.T, H_, dw]) + ca.dot(g_, dw)
+            obj = 0.5 * ca.mtimes([dw.T, H_, dw]) + ca.dot(g_, dw)
+            lhs = ca.mtimes(A_, dw) if A_.shape[0] else ca.DM.zeros((0, 1))
 
-            lhs = ca.mtimes(A_, dw) if A_.shape[0]>0 else ca.DM.zeros((0,1))
-
-            qp_dict = {'x': dw, 'f': obj, 'g': lhs}
-            solver = ca.qpsol("tmp_qp","qpoases", qp_dict, {"printLevel":"none"})
+            qp_dict = {"x": dw, "f": obj, "g": lhs}
+            solver = ca.qpsol("tmp_qp", "qpoases", qp_dict, {'printLevel': 'none', 'sparse': True, 'schur': self.schur})
             sol = solver(lbg=lbA_, ubg=ubA_, lbx=lbx_, ubx=ubx_)
-            return sol['x'].full().ravel()
+            return sol["x"].full().ravel()
 
-        max_iter = self.options.get("max_iter", 15)
-        tol      = self.options.get("tol", 1e-8)
-        w = w0.copy()
+        # Gauss–Newton loop
+        max_iter = self.options.get("max_iter", 20)
+        tol = self.options.get("tol", 1e-12)
+        w = ca.DM(self.x0)
 
+        last_norm_R = np.inf
         for it in range(max_iter):
+            # evaluate residuals / constraints
             R_val = np.array(R_fun(w)).ravel()
-            G_val = np.array(g_fun(w)).ravel() if ncons>0 else np.array([])
+            G_val = np.array(g_fun(w)).ravel() if ncons > 0 else np.array([])
             f_val = float(f_fun(w))
 
-            norm_R = np.linalg.norm(R_val,2)
-            norm_G = np.linalg.norm(G_val,np.inf) if G_val.size>0 else 0.0
+            norm_R = np.linalg.norm(R_val, 2)
+            norm_G = np.linalg.norm(G_val, np.inf) if G_val.size > 0 else 0.0
 
-            if norm_R < tol and norm_G < tol:
+            # Convergence test
+            if last_norm_R - norm_R < tol and norm_G < tol:
                 print(f"[gn] Converged at iter={it}, f={f_val:.3e}")
                 break
 
-            JR = np.array(JR_fun(w))
-            H  = JR.T.dot(JR)
-            g  = JR.T.dot(R_val)
+            # build GN system  H = JᵀJ , g = Jᵀr
+            JR = JR_fun(w)
+            H = ca.mtimes(ca.transpose(JR), JR)
+            g = ca.mtimes(ca.transpose(JR), R_val)
 
-            if ncons>0:
-                JG = np.array(JG_fun(w))
-                lbA_ = -G_val
-                ubA_ = -G_val
-                A_ = ca.DM(JG)
-                lbA_dm = ca.DM(lbA_.reshape((-1,1)))
-                ubA_dm = ca.DM(ubA_.reshape((-1,1)))
+            # assemble QP matrices
+            if ncons > 0:
+                A = JG_fun(w)
+                lbA_dm = ubA_dm = ca.DM(-G_val.reshape((-1, 1)))
             else:
-                A_ = ca.DM.zeros((0,nvar))
-                lbA_dm = ca.DM.zeros((0,1))
-                ubA_dm = ca.DM.zeros((0,1))
+                A = ca.DM.zeros((0, nvar))
+                lbA_dm = ubA_dm = ca.DM.zeros((0, 1))
 
-            lb_dw = lbw - w
-            ub_dw = ubw - w
-            lbx_dm = ca.DM(lb_dw.reshape((-1,1)))
-            ubx_dm = ca.DM(ub_dw.reshape((-1,1)))
+            # solve the QP for search direction
+            dw = solve_qp(H, g, A, lbA_dm, ubA_dm, lbw, ubw)
 
-            H_ = ca.DM(H)
-            g_ = ca.DM(g)
-            if g_.shape == (nvar,):
-                g_ = g_.reshape((nvar,1))
-
-            dw = solve_qp(H_, g_, A_, lbA_dm, ubA_dm, lbx_dm, ubx_dm)
+            # back-tracking line-search (Armijo)
             if it > 0:
-                desc_amount = np.dot(g, dw)  
-
-                alpha     = 1.0
-                beta      = 0.5
-                sigma     = 1e-4
-                alpha_min = 1e-4
-
-                success = False
-                
-                while True:
-                    w_try = w + alpha * dw
-                    w_try = np.minimum(np.maximum(w_try, lbw), ubw)
-                    f_try = float(f_fun(w_try))
-
-                    lhs = f_try
-                    rhs = f_val + sigma * alpha * desc_amount
-
-                    if np.isfinite(lhs) and (lhs <= rhs):
-                        w     = w_try
-                        f_val = f_try
-                        success = True
+                desc = np.dot(np.array(g).ravel(), dw)
+                alpha, beta, sigma = 1.0, 0.5, 1e-6
+                while alpha >= 1e-4:
+                    w_try = ca.DM(w + alpha * dw)
+                    if float(f_fun(w_try)) <= f_val + sigma * alpha * desc:
+                        w = w_try
                         break
-                    else:
-                        alpha *= beta
-
-                    if alpha < alpha_min:
-                        print(f"[gn] no improvement at iter={it}, stop.")
-                        break
-
-                if not success:
+                    alpha *= beta
+                else:
+                    print(f"[gn] no improvement at iter={it}, stop.")
                     break
             else:
                 w = w + dw
 
-        G_final = np.array(g_fun(w)).ravel() if ncons>0 else np.array([])
+            last_norm_R = norm_R
+
+        # pack & return solution
+        G_final = np.array(g_fun(w)).ravel() if ncons > 0 else np.array([])
         sol = {
             "x": ca.DM(w),
             "f": float(f_fun(w)),
-            "g": ca.DM(G_final.reshape((-1,1))) if G_final.size>0 else ca.DM.zeros((0,1)),
-            "lam_g": ca.DM.zeros((G_final.size,1)),
-            "lam_x": ca.DM.zeros((w.size,1))
+            "g": ca.DM(G_final.reshape((-1, 1)))
+            if G_final.size > 0
+            else ca.DM.zeros((0, 1)),
         }
         return sol

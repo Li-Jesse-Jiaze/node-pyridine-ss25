@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from typing import Callable, List, Tuple
 from parameter_estimator import ParameterEstimator
 
+from utils import timed
+
 @dataclass
 class ModelConfig:
     name: str
@@ -84,16 +86,17 @@ def generate_data(F: ca.Function, t_grid: np.ndarray, x0: np.ndarray,
     return data, meas
 
 
+@timed
 def estimate_p(dae: dict, t_grid: np.ndarray, meas: np.ndarray,
                p_init: List[float], p_lb: List[float], p_ub: List[float],
                ipopt_opts: dict = None, strategy: str = "ipopt") -> np.ndarray:
     est = ParameterEstimator(
-        dae, t_meas=t_grid, x_meas=meas,
-        p_init=p_init, p_lb=p_lb, p_ub=p_ub,
+        ca.Function("ode", [dae['x'], dae['p']], [dae['ode']]), dae['x'], dae['p'], t_meas=t_grid, x_meas=meas,
+        p_init=p_init,
         options={'ipopt': ipopt_opts or {}}
     )
     sol = est.solve(strategy)
-    return sol['x'][-len(p_init):].full().ravel()
+    return sol['x'][:len(p_init)].full().ravel()
 
 
 def simulate(F: ca.Function, t_grid: np.ndarray, x0: np.ndarray,
@@ -118,19 +121,19 @@ def plot(t_grid: np.ndarray, true: np.ndarray, meas: np.ndarray,
     ax.legend(ncol=3, fontsize='small')
     plt.tight_layout()
     plt.savefig("result.svg")
-    plt.show()
+    # plt.show()
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', choices=MODELS.keys(), default='lv',
                         help='lv or pyridine')
-    parser.add_argument('--strategy', choices=['ipopt', 'gn'], default='ipopt',
+    parser.add_argument('--strategy', choices=['ipopt', 'gn', 'gn_fast'], default='gn_fast',
                         help='parameter estimation strategy: ipopt (default) or gn')
     args = parser.parse_args()
 
     cfg = MODELS[args.model]
-    dt = 0.1
+    dt = 0.01
     t_grid = np.arange(0, 10 + 1e-9, dt)
 
     F, dae = cfg.build_integrator(dt)
