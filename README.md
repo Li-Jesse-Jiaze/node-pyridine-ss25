@@ -53,7 +53,7 @@ cd /usr/local/lib
 ln -s libcoinhsl.so libhsl.so
 ```
 
-Before running `python`
+Add this line to `.venv/bin/activate`
 
 ```shell
 export LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
