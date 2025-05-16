@@ -88,12 +88,12 @@ def estimate_p(dae: dict, t_grid: np.ndarray, meas: np.ndarray,
                p_init: List[float], p_lb: List[float], p_ub: List[float],
                ipopt_opts: dict = None, strategy: str = "ipopt") -> np.ndarray:
     est = ParameterEstimator(
-        dae, t_meas=t_grid, x_meas=meas,
-        p_init=p_init, p_lb=p_lb, p_ub=p_ub,
+        ca.Function("ode", [dae['x'], dae['p']], [dae['ode']]), dae['x'], dae['p'], t_meas=t_grid, x_meas=meas,
+        p_init=p_init, num_shooting=50,
         options={'ipopt': ipopt_opts or {}}
     )
     sol = est.solve(strategy)
-    return sol['x'][-len(p_init):].full().ravel()
+    return sol['x'][:len(p_init)].full().ravel()
 
 
 def simulate(F: ca.Function, t_grid: np.ndarray, x0: np.ndarray,
@@ -125,7 +125,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', choices=MODELS.keys(), default='lv',
                         help='lv or pyridine')
-    parser.add_argument('--strategy', choices=['ipopt', 'gn'], default='ipopt',
+    parser.add_argument('--strategy', choices=['ipopt', 'gn', 'gn_fast'], default='gn_fast',
                         help='parameter estimation strategy: ipopt (default) or gn')
     args = parser.parse_args()
 
