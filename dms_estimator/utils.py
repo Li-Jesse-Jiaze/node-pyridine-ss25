@@ -4,6 +4,10 @@ from time import perf_counter
 from functools import wraps
 
 
+def printyellow(msg: str, /, *args, **kwargs) -> None:
+    print(f"\033[33m{msg}\033[0m", *args, **kwargs)
+
+
 def silence(func):
     @wraps(func)
     def wrapper(*args, **kwargs):
