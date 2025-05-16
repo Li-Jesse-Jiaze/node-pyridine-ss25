@@ -202,16 +202,19 @@ class ParameterEstimator:
         return solver(x0=self.x0, lbg=0, ubg=0)
 
     def _solve_gn(self) -> Dict[str, Any]:
+        """
+        Gauss-Newton solver (with simple back-tracking line-search).
+        """
         w_sym = self.cnlls["x"]
         f_sym = self.cnlls["f"]
         g_sym = self.cnlls["g"]
-        w0    = self.x0
-        lbw = -np.inf * np.ones_like(w0)
-        ubw =  np.inf * np.ones_like(w0)
+        lbw = -np.inf * ca.DM(np.ones_like(self.x0).reshape((-1, 1)))
+        ubw =  np.inf * ca.DM(np.ones_like(self.x0).reshape((-1, 1)))
 
         nvar  = w_sym.numel()
         ncons = g_sym.numel()
 
+        # Functions for residuals, constraints, Jacobians
         R_sym = self.errors
         R_fun = ca.Function('R_fun', [w_sym],[R_sym])
         g_fun = ca.Function('g_fun', [w_sym],[g_sym])
@@ -230,20 +233,21 @@ class ParameterEstimator:
             n_ = H_.shape[0]
             dw = ca.MX.sym("dw", n_, 1)
 
-            obj = 0.5*ca.mtimes([dw.T, H_, dw]) + ca.dot(g_, dw)
-
-            lhs = ca.mtimes(A_, dw) if A_.shape[0]>0 else ca.DM.zeros((0,1))
+            obj = 0.5 * ca.mtimes([dw.T, H_, dw]) + ca.dot(g_, dw)
+            lhs = ca.mtimes(A_, dw) if A_.shape[0] else ca.DM.zeros((0, 1))
 
             qp_dict = {'x': dw, 'f': obj, 'g': lhs}
-            solver = ca.qpsol("tmp_qp","qpoases", qp_dict, {"printLevel":"none"})
+            solver = ca.qpsol("tmp_qp", "qpoases", qp_dict, {"printLevel":"none"})
             sol = solver(lbg=lbA_, ubg=ubA_, lbx=lbx_, ubx=ubx_)
             return sol['x'].full().ravel()
 
+        # Gauss–Newton loop
         max_iter = self.options.get("max_iter", 20)
         tol      = self.options.get("tol", 1e-12)
-        w = w0
+        w = ca.DM(self.x0)
 
         for it in range(max_iter):
+            # evaluate residuals / constraints
             R_val = np.array(R_fun(w)).ravel()
             G_val = np.array(g_fun(w)).ravel() if ncons>0 else np.array([])
             f_val = float(f_fun(w))
@@ -252,72 +256,44 @@ class ParameterEstimator:
             norm_R = np.linalg.norm(R_val,2)
             norm_G = np.linalg.norm(G_val,np.inf) if G_val.size>0 else 0.0
 
+            # Convergence test
             if last_norm_R - norm_R < tol and norm_G < tol:
                 print(f"[gn] Converged at iter={it}, f={f_val:.3e}")
                 break
-
+            
+            # build GN system  H = JᵀJ , g = Jᵀr
             JR = JR_fun(w)
             H = ca.mtimes(ca.transpose(JR), JR)
-            g  = ca.mtimes(ca.transpose(JR), R_val)
+            g = ca.mtimes(ca.transpose(JR), R_val)
 
+            # assemble QP matrices
             if ncons>0:
-                JG = np.array(JG_fun(w))
-                lbA_ = -G_val
-                ubA_ = -G_val
-                A_ = ca.DM(JG)
-                lbA_dm = ca.DM(lbA_.reshape((-1,1)))
-                ubA_dm = ca.DM(ubA_.reshape((-1,1)))
+                A = JG_fun(w)
+                lbA_dm = ubA_dm = ca.DM(-G_val.reshape((-1, 1)))
             else:
-                A_ = ca.DM.zeros((0,nvar))
-                lbA_dm = ca.DM.zeros((0,1))
-                ubA_dm = ca.DM.zeros((0,1))
+                A = ca.DM.zeros((0,nvar))
+                lbA_dm = ubA_dm = ca.DM.zeros((0, 1))
 
-            lb_dw = lbw - w
-            ub_dw = ubw - w
-            lbx_dm = ca.DM(lb_dw.reshape((-1,1)))
-            ubx_dm = ca.DM(ub_dw.reshape((-1,1)))
+            # solve the QP for search direction
+            dw = solve_qp(H, g, A, lbA_dm, ubA_dm, lbw, ubw)
 
-            H_ = ca.DM(H)
-            g_ = ca.DM(g)
-            if g_.shape == (nvar,):
-                g_ = g_.reshape((nvar,1))
-
-            dw = solve_qp(H_, g_, A_, lbA_dm, ubA_dm, lbx_dm, ubx_dm)
+            # back-tracking line-search (Armijo)
             if it > 0:
-                desc_amount = np.dot(np.array(g).ravel(), dw)  
-
-                alpha     = 1.0
-                beta      = 0.5
-                sigma     = 1e-6
-                alpha_min = 1e-4
-
-                success = False
-                
-                while True:
-                    w_try = w + alpha * dw
-                    w_try = ca.DM(np.minimum(np.maximum(w_try, lbw), ubw))
-                    f_try = float(f_fun(w_try))
-
-                    lhs = f_try
-                    rhs = f_val + sigma * alpha * desc_amount
-
-                    if np.isfinite(lhs) and (lhs <= rhs):
-                        w     = w_try
-                        f_val = f_try
-                        success = True
+                desc = np.dot(np.array(g).ravel(), dw)
+                alpha, beta, sigma = 1.0, 0.5, 1e-6
+                while alpha >= 1e-4:
+                    w_try = ca.DM(w + alpha * dw)
+                    if float(f_fun(w_try)) <= f_val + sigma * alpha * desc:
+                        w = w_try
                         break
-                    else:
-                        alpha *= beta
-
-                    if alpha < alpha_min:
-                        print(f"[gn] no improvement at iter={it}, stop.")
-                        break
-
-                if not success:
+                    alpha *= beta
+                else:
+                    print(f"[gn] no improvement at iter={it}, stop.")
                     break
             else:
                 w = w + dw
-
+        
+        # pack & return solution
         G_final = np.array(g_fun(w)).ravel() if ncons>0 else np.array([])
         sol = {
             "x": ca.DM(w),
