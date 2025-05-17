@@ -32,6 +32,25 @@ def lv_problem(dt: float) -> Tuple[ca.Function, dict]:
     return integrator, ode, states, params
 
 
+def notorious_problem(dt: float, mu: float = 60.0):
+    x1, x2, t = ca.MX.sym("x1"), ca.MX.sym("x2"), ca.MX.sym("t")
+    p = ca.MX.sym("p")
+
+    rhs = ca.vertcat(
+        x2, 
+        mu**2 * x1 - (mu**2 + p**2) * ca.sin(p * t), 
+        1.0
+    )
+    X = ca.vertcat(x1, x2, t)
+
+    P = ca.vertcat(p)
+    ode = ca.Function("ode", [X, p], [rhs])
+
+    dae = {"x": X, "p": p, "ode": rhs}
+    F = ca.integrator("F", "cvodes", dae, 0.0, dt)
+    return F, ode, X, p
+
+
 def pyridine_problem(dt: float) -> Tuple[ca.Function, dict]:
     A, B, C, D, E, F, G = [ca.MX.sym(n) for n in "ABCDEFG"]
     p = ca.MX.sym("p", 11)
@@ -112,7 +131,7 @@ def plot(
     meas: np.ndarray,
     est: np.ndarray,
     labels: List[str],
-    show_every=1
+    show_every=1,
 ):
     fig, ax = plt.subplots()
     for i, lbl in enumerate(labels):

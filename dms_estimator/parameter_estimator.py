@@ -211,6 +211,7 @@ class ParameterEstimator:
         except KeyError as exc:
             raise ValueError(f"Unknown strategy '{strategy}'.") from exc
 
+    @silence
     def _solve_ipopt(self) -> Dict[str, Any]:
         """Full‑space IPOPT (exact Hessian or L-BFGS?)."""
         options = dict()
@@ -224,6 +225,7 @@ class ParameterEstimator:
         sol = solver(x0=self.x0, lbg=0, ubg=0)
         return sol
 
+    @silence
     def _solve_gn_fast(self) -> Dict[str, Any]:
         """IPOPT with user‑supplied Hessian callback"""
         # Jacobian of residuals wrt *all* decision vars
