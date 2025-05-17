@@ -1,0 +1,94 @@
+#Measurement: 50, #node: 10
+WARNING: num_shooting=10 < #measurements=50; estimation accuracy may degrade.
+[estimate_p] took 1.825767s
+[  1.82   0.83  26.64 -36.78   0.08   2.92   0.13   2.81   0.02   0.30
+   2.41]
+
+#Measurement: 50, #node: 20
+WARNING: num_shooting=20 < #measurements=50; estimation accuracy may degrade.
+[estimate_p] took 4.650939s
+[  1.84   0.86  29.41 -15.55   0.07   3.25  -0.04 -13.27   0.04   0.66
+  22.52]
+
+#Measurement: 50, #node: 50
+[estimate_p] took 1.108400s
+[  1.84   0.89  31.22 -13.84   0.05   2.67   0.10  -0.99   0.04   0.49
+   3.04]
+
+#Measurement: 100, #node: 10
+WARNING: num_shooting=10 < #measurements=100; estimation accuracy may degrade.
+[estimate_p] took 1.448526s
+[  1.84   0.84  24.81 -20.33   0.08   1.84   0.23   2.02   0.01   0.10
+   6.53]
+
+#Measurement: 100, #node: 20
+WARNING: num_shooting=20 < #measurements=100; estimation accuracy may degrade.
+[estimate_p] took 5.008303s
+[  1.82   0.86  29.28 -18.54   0.07   2.20   0.14   2.13   0.03   0.34
+  -4.71]
+
+#Measurement: 100, #node: 50
+WARNING: num_shooting=50 < #measurements=100; estimation accuracy may degrade.
+[estimate_p] took 1.850987s
+[  1.81   0.87  31.88 -20.96   0.07   2.58   0.12   0.57   0.03   0.41
+  -3.14]
+
+#Measurement: 100, #node: 100
+[estimate_p] took 1.229006s
+[  1.81   0.87  31.89 -20.97   0.07   2.58   0.12   0.57   0.03   0.41
+  -3.14]
+
+#Measurement: 500, #node: 10
+WARNING: num_shooting=10 < #measurements=500; estimation accuracy may degrade.
+[estimate_p] took 20.718965s
+[  1.80   0.85  24.39 -23.41   0.08   2.20   0.18   2.26  -0.01   0.18
+   4.69]
+
+#Measurement: 500, #node: 20
+WARNING: num_shooting=20 < #measurements=500; estimation accuracy may degrade.
+[estimate_p] took 3.645498s
+[ 1.80  0.88 31.55 42.65  0.06  1.94  0.06 11.30  0.02  0.53 10.58]
+
+#Measurement: 500, #node: 50
+WARNING: num_shooting=50 < #measurements=500; estimation accuracy may degrade.
+[estimate_p] took 3.123584s
+[ 1.80  0.90 31.25 10.16  0.06  2.82  0.06  2.69  0.02  0.52  8.16]
+
+#Measurement: 500, #node: 100
+WARNING: num_shooting=100 < #measurements=500; estimation accuracy may degrade.
+[estimate_p] took 4.074249s
+[ 1.80  0.90 31.28 10.18  0.06  2.82  0.07  2.66  0.02  0.52  8.23]
+
+#Measurement: 500, #node: 500
+[estimate_p] took 2.879580s
+[ 1.80  0.90 31.28 10.18  0.06  2.82  0.07  2.66  0.02  0.52  8.24]
+
+#Measurement: 1000, #node: 10
+WARNING: num_shooting=10 < #measurements=1000; estimation accuracy may degrade.
+[estimate_p] took 7.063026s
+[  1.83   0.82  27.48 -18.19   0.08   2.69   0.04   5.08   0.01   0.47
+  -8.43]
+
+#Measurement: 1000, #node: 20
+WARNING: num_shooting=20 < #measurements=1000; estimation accuracy may degrade.
+[estimate_p] took 14.703360s
+[ 1.81  0.88 31.30 47.03  0.06  1.68  0.08 10.52  0.02  0.49 10.07]
+
+#Measurement: 1000, #node: 50
+WARNING: num_shooting=50 < #measurements=1000; estimation accuracy may degrade.
+[estimate_p] took 4.734807s
+[ 1.81  0.90 30.72 15.66  0.06  2.44  0.07  5.02  0.02  0.50  5.28]
+
+#Measurement: 1000, #node: 100
+WARNING: num_shooting=100 < #measurements=1000; estimation accuracy may degrade.
+[estimate_p] took 5.587154s
+[ 1.81  0.90 30.73 15.40  0.06  2.44  0.07  4.95  0.02  0.50  5.27]
+
+#Measurement: 1000, #node: 500
+WARNING: num_shooting=500 < #measurements=1000; estimation accuracy may degrade.
+[estimate_p] took 18.255127s
+[ 1.81  0.90 30.74 15.40  0.06  2.44  0.07  4.95  0.02  0.50  5.28]
+
+#Measurement: 1000, #node: 1000
+[estimate_p] took 5.099937s
+[ 1.81  0.90 30.74 15.40  0.06  2.44  0.07  4.95  0.02  0.50  5.28]
