@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Callable, List, Tuple
 
-import casadi as ca
+import casadi as cs
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -12,7 +12,7 @@ from .utils import timed
 @dataclass
 class ModelConfig:
     name: str
-    build_integrator: Callable[[float], Tuple[ca.Function, dict]]
+    build_integrator: Callable[[float], Tuple[cs.Function, dict]]
     true_p: List[float]
     x0: np.ndarray
     p_init: List[float]
@@ -20,41 +20,40 @@ class ModelConfig:
 
 
 # Example systems
-def lv_problem(dt: float) -> Tuple[ca.Function, dict]:
-    x1, x2 = ca.MX.sym("x1"), ca.MX.sym("x2")
-    alpha, beta = ca.MX.sym("alpha"), ca.MX.sym("beta")
-    rhs = ca.vertcat(alpha * x1 - beta * x1 * x2, 0.4 * x1 * x2 - 0.6 * x2)
-    states = ca.vertcat(x1, x2)
-    params = ca.vertcat(alpha, beta)
-    ode = ca.Function("ode", [states, params], [rhs])
+def lv_problem(dt: float) -> Tuple[cs.Function, dict]:
+    x1, x2 = cs.MX.sym("x1"), cs.MX.sym("x2")
+    alpha, beta = cs.MX.sym("alpha"), cs.MX.sym("beta")
+    rhs = cs.vertcat(alpha * x1 - beta * x1 * x2, 0.4 * x1 * x2 - 0.6 * x2)
+    states = cs.vertcat(x1, x2)
+    params = cs.vertcat(alpha, beta)
+    ode = cs.Function("ode", [states, params], [rhs])
     dae = {"x": states, "p": params, "ode": rhs}
-    integrator = ca.integrator("F", "cvodes", dae, 0.0, dt, {})
+    integrator = cs.integrator("F", "cvodes", dae, 0.0, dt, {})
     return integrator, ode, states, params
 
 
 def notorious_problem(dt: float, mu: float = 60.0):
-    x1, x2, t = ca.MX.sym("x1"), ca.MX.sym("x2"), ca.MX.sym("t")
-    p = ca.MX.sym("p")
+    x1, x2, t = cs.MX.sym("x1"), cs.MX.sym("x2"), cs.MX.sym("t")
+    p = cs.MX.sym("p")
 
-    rhs = ca.vertcat(
+    rhs = cs.vertcat(
         x2, 
-        mu**2 * x1 - (mu**2 + p**2) * ca.sin(p * t), 
+        mu**2 * x1 - (mu**2 + p**2) * cs.sin(p * t), 
         1.0
     )
-    X = ca.vertcat(x1, x2, t)
+    X = cs.vertcat(x1, x2, t)
 
-    P = ca.vertcat(p)
-    ode = ca.Function("ode", [X, p], [rhs])
+    ode = cs.Function("ode", [X, p], [rhs])
 
     dae = {"x": X, "p": p, "ode": rhs}
-    F = ca.integrator("F", "cvodes", dae, 0.0, dt)
+    F = cs.integrator("F", "cvodes", dae, 0.0, dt)
     return F, ode, X, p
 
 
-def pyridine_problem(dt: float) -> Tuple[ca.Function, dict]:
-    A, B, C, D, E, F, G = [ca.MX.sym(n) for n in "ABCDEFG"]
-    p = ca.MX.sym("p", 11)
-    rhs = ca.vertcat(
+def pyridine_problem(dt: float) -> Tuple[cs.Function, dict]:
+    A, B, C, D, E, F, G = [cs.MX.sym(n) for n in "ABCDEFG"]
+    p = cs.MX.sym("p", 11)
+    rhs = cs.vertcat(
         -p[0] * A + p[8] * B,
         p[0] * A - p[1] * B - p[2] * B * C + p[6] * D - p[8] * B 
         + p[9] * D * F,
@@ -66,15 +65,15 @@ def pyridine_problem(dt: float) -> Tuple[ca.Function, dict]:
         - p[10] * E * F,
         p[5] * C + p[6] * D + p[7] * E,
     )
-    states = ca.vertcat(A, B, C, D, E, F, G)
-    ode = ca.Function("ode", [states, p], [rhs])
+    states = cs.vertcat(A, B, C, D, E, F, G)
+    ode = cs.Function("ode", [states, p], [rhs])
     dae = {"x": states, "p": p, "ode": rhs}
-    integrator = ca.integrator("F", "cvodes", dae, 0.0, dt, {})
+    integrator = cs.integrator("F", "cvodes", dae, 0.0, dt, {})
     return integrator, ode, states, p
 
 
 def generate_data(
-    integrator: ca.Function,
+    integrator: cs.Function,
     t_grid: np.ndarray,
     x0: np.ndarray,
     true_p: List[float],
@@ -92,9 +91,9 @@ def generate_data(
 
 @timed
 def estimate_p(
-    ode: ca.Function,
-    states: ca.MX,
-    params: ca.MX,
+    ode: cs.Function,
+    states: cs.MX,
+    params: cs.MX,
     t_grid: np.ndarray,
     meas: np.ndarray,
     p_init: List[float],
@@ -116,7 +115,7 @@ def estimate_p(
 
 
 def simulate(
-    F: ca.Function, t_grid: np.ndarray, x0: np.ndarray, p: List[float]
+    F: cs.Function, t_grid: np.ndarray, x0: np.ndarray, p: List[float]
 ) -> np.ndarray:
     sim = np.zeros((len(t_grid), x0.size))
     sim[0] = x0
