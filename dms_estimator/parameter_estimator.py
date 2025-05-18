@@ -280,7 +280,15 @@ class ParameterEstimator:
             lhs = cs.mtimes(A_, dw) if A_.shape[0] else cs.DM.zeros((0, 1))
 
             qp_dict = {"x": dw, "f": obj, "g": lhs}
-            solver = cs.qpsol("tmp_qp", "qpoases", qp_dict, {'printLevel': 'none', 'sparse': True, 'schur': self.schur, 'hessian_type':'posdef', 'enableRegularisation': False, 'enableCholeskyRefactorisation': 1, 'numRefinementSteps': 0})
+            solver = cs.qpsol("tmp_qp", "qpoases", qp_dict, 
+                {
+                    'printLevel': 'none', 
+                    'sparse': True, 
+                    'schur': self.schur, 
+                    'hessian_type':'posdef', 
+                    'numRefinementSteps': 0,
+                }
+            )
             sol = solver(lbg=lbA_, ubg=ubA_)
             return sol["x"].full().ravel()
 
