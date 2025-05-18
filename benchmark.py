@@ -28,7 +28,7 @@ for n_m in num_meas:
             integrator, t_grid, cfg.x0, cfg.true_p, noise_std=0.01
         )
 
-        p_hat = dmse.estimate_p(
+        p_hat, _ = dmse.estimate(
             ode,
             states,
             params,

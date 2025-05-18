@@ -10,10 +10,12 @@ Example:
 from typing import Callable, Dict, Sequence, Any, Optional
 import casadi as cs
 import numpy as np
+# # If do visualization
+# import csnlp
+# from matplotlib import pyplot as plt
 
-from .utils import silence, printyellow
+from .utils import silence, printyellow, timed
 
-__all__ = ["ParameterEstimator"]
 
 class ParameterEstimator:
     """CNLLS parameter estimation via direct multiple‑shooting.
@@ -220,6 +222,9 @@ class ParameterEstimator:
         """IPOPT with user‑supplied Hessian callback"""
         # Jacobian of residuals wrt *all* decision vars
         J = cs.jacobian(self.errors, self.variables)
+        # # Plot H
+        # csnlp.util.plot.spy(cs.mtimes(J.T, J))
+        # plt.savefig("H.svg")
         # Upper‑triangular part of JᵀJ
         H = cs.triu(cs.mtimes(J.T, J))
         sigma = cs.MX.sym("sigma") # IPOPT multiplies Hessian by *lam_f*
@@ -275,7 +280,7 @@ class ParameterEstimator:
             lhs = cs.mtimes(A_, dw) if A_.shape[0] else cs.DM.zeros((0, 1))
 
             qp_dict = {"x": dw, "f": obj, "g": lhs}
-            solver = cs.qpsol("tmp_qp", "qpoases", qp_dict, {'printLevel': 'none', 'sparse': True, 'schur': self.schur})
+            solver = cs.qpsol("tmp_qp", "qpoases", qp_dict, {'printLevel': 'none', 'sparse': True, 'schur': self.schur, 'hessian_type':'posdef', 'enableRegularisation': False, 'enableCholeskyRefactorisation': 1, 'numRefinementSteps': 0})
             sol = solver(lbg=lbA_, ubg=ubA_)
             return sol["x"].full().ravel()
 
@@ -292,10 +297,10 @@ class ParameterEstimator:
             f_val = float(f_fun(w))
 
             norm_R = np.linalg.norm(R_val, 2)
-            norm_G = np.linalg.norm(G_val, np.inf) if G_val.size > 0 else 0.0
+            # norm_G = np.linalg.norm(G_val, np.inf) if G_val.size > 0 else 0.0
 
             # Convergence test
-            if (last_norm_R - norm_R) / norm_R < tol and norm_G < tol:
+            if (last_norm_R - norm_R) / norm_R < tol:
                 print(f"[gn] Converged at iter={it}, f={f_val:.3e}")
                 break
 
@@ -319,7 +324,7 @@ class ParameterEstimator:
             if it > 0:
                 desc = np.dot(np.array(g).ravel(), dw)
                 alpha, beta, sigma = 1.0, 0.5, 1e-6
-                while alpha >= 1e-4:
+                while alpha >= 1e-10:
                     w_try = cs.DM(w + alpha * dw)
                     if float(f_fun(w_try)) <= f_val + sigma * alpha * desc:
                         w = w_try
@@ -333,6 +338,9 @@ class ParameterEstimator:
 
             last_norm_R = norm_R
 
+        # # Plot A
+        # csnlp.util.plot.spy(A)
+        # plt.savefig("A.svg")
         # Pack solution
         G_final = np.array(g_fun(w)).ravel() if ncons > 0 else np.array([])
         sol = {

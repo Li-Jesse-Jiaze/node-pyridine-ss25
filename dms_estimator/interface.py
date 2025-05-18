@@ -82,6 +82,7 @@ def generate_data(
 ) -> Tuple[np.ndarray, np.ndarray]:
     data = np.zeros((len(t_grid), x0.size))
     data[0] = x0
+
     for k in range(len(t_grid) - 1):
         data[k + 1] = integrator(x0=data[k], p=true_p)["xf"].full().ravel()
     rng = np.random.default_rng(seed)
@@ -90,7 +91,7 @@ def generate_data(
 
 
 @timed
-def estimate_p(
+def estimate(
     ode: cs.Function,
     states: cs.MX,
     params: cs.MX,
@@ -111,17 +112,9 @@ def estimate_p(
         options={},
     )
     sol = est.solve(strategy)
-    return sol["x"][: len(p_init)].full().ravel()
-
-
-def simulate(
-    F: cs.Function, t_grid: np.ndarray, x0: np.ndarray, p: List[float]
-) -> np.ndarray:
-    sim = np.zeros((len(t_grid), x0.size))
-    sim[0] = x0
-    for k in range(len(t_grid) - 1):
-        sim[k + 1] = F(x0=sim[k], p=p)["xf"].full().ravel()
-    return sim
+    p = sol["x"][: len(p_init)].full().ravel()
+    s = sol['x'][params.size1():].full().ravel().reshape(-1, states.size1())
+    return p, s
 
 
 def plot(
@@ -131,11 +124,14 @@ def plot(
     est: np.ndarray,
     labels: List[str],
     show_every=1,
-):
-    fig, ax = plt.subplots()
+): 
+    idx = np.linspace(0, len(t_grid)-1, len(est), dtype=int)
+    _, ax = plt.subplots()
     for i, lbl in enumerate(labels):
+        if lbl == 't':
+            continue
         # ax.plot(t_grid, true[:, i], "--", label=f"{lbl} true")
-        ax.plot(t_grid, est[:, i], label=f"{lbl} est")
+        ax.plot(t_grid[idx], est[:, i], label=f"{lbl} est")
         ax.scatter(t_grid[::show_every], meas[::show_every, i], s=8, alpha=0.4)
     ax.set(xlabel="time", ylabel="states", title="True vs Measured vs Estimated")
     ax.legend(ncol=3, fontsize="small")
