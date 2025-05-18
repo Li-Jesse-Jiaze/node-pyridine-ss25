@@ -136,5 +136,5 @@ def plot(
     ax.set(xlabel="time", ylabel="states", title="True vs Measured vs Estimated")
     ax.legend(ncol=3, fontsize="small")
     plt.tight_layout()
-    plt.savefig("result.svg")
+    # plt.savefig("result.svg")
     # plt.show()
