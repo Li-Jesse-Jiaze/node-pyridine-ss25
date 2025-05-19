@@ -14,7 +14,7 @@ import numpy as np
 # import csnlp
 # from matplotlib import pyplot as plt
 
-from .utils import silence, printyellow, timed
+from .utils import silence, printyellow, printgreen, timed
 
 
 class ParameterEstimator:
@@ -81,16 +81,20 @@ class ParameterEstimator:
 
         # Number of shooting nodes
         self.num_shooting = self.N if num_shooting is None else int(num_shooting)
+        if self.num_shooting == self.N:
+            printgreen(
+                f"Using the Default: #node=#meas={self.N};"
+            )
         if self.num_shooting > self.N:
             printyellow(
-                f"WARNING: num_shooting={self.num_shooting} > #measurements={self.N};"
+                f"WARNING: #node={self.num_shooting} > #meas={self.N};"
                 "falling back to one node per measurement."
             )
             self.num_shooting = self.N
         self.less_node = self.num_shooting < self.N
         if self.less_node:
             printyellow(
-                f"WARNING: num_shooting={self.num_shooting} < #measurements={self.N}; "
+                f"WARNING: #node={self.num_shooting} < #meas={self.N}; "
                 "estimation accuracy may degrade."
             )
         

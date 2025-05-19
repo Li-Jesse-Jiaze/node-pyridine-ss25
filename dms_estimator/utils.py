@@ -8,6 +8,10 @@ def printyellow(msg: str, /, *args, **kwargs) -> None:
     print(f"\033[33m{msg}\033[0m", *args, **kwargs)
 
 
+def printgreen(msg: str, /, *args, **kwargs) -> None:
+    print(f"\033[32m{msg}\033[0m", *args, **kwargs)
+
+
 def silence(func):
     @wraps(func)
     def wrapper(*args, **kwargs):
