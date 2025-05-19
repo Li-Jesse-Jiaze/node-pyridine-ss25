@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Callable, List, Tuple
+from typing import Callable, List, Tuple, Optional
 
 import casadi as cs
 import matplotlib.pyplot as plt
@@ -20,7 +20,7 @@ class ModelConfig:
 
 
 # Example systems
-def lv_problem(dt: float) -> Tuple[cs.Function, dict]:
+def lv_problem(dt: float):
     x1, x2 = cs.MX.sym("x1"), cs.MX.sym("x2")
     alpha, beta = cs.MX.sym("alpha"), cs.MX.sym("beta")
     rhs = cs.vertcat(alpha * x1 - beta * x1 * x2, 0.4 * x1 * x2 - 0.6 * x2)
@@ -50,7 +50,32 @@ def notorious_problem(dt: float, mu: float = 60.0):
     return F, ode, X, p
 
 
-def pyridine_problem(dt: float) -> Tuple[cs.Function, dict]:
+def lorenz_problem(dt: float):
+    x = cs.MX.sym("x")
+    y = cs.MX.sym("y")
+    z = cs.MX.sym("z")
+    states = cs.vertcat(x, y, z)
+
+    sigma = cs.MX.sym("sigma")
+    rho = cs.MX.sym("rho")
+    beta = cs.MX.sym("beta")
+    params = cs.vertcat(sigma, rho, beta)
+
+    rhs = cs.vertcat(
+        sigma * (y - x), 
+        x * (rho - z) - y, 
+        x * y - beta * z
+    )
+
+    ode = cs.Function("ode_lorenz", [states, params], [rhs])
+
+    dae = {"x": states, "p": params, "ode": rhs}
+    integrator = cs.integrator("F_lorenz", "cvodes", dae, 0.0, dt, {})
+
+    return integrator, ode, states, params
+
+
+def pyridine_problem(dt: float):
     A, B, C, D, E, F, G = [cs.MX.sym(n) for n in "ABCDEFG"]
     p = cs.MX.sym("p", 11)
     rhs = cs.vertcat(
@@ -113,27 +138,29 @@ def estimate(
     )
     sol = est.solve(strategy)
     p = sol["x"][: len(p_init)].full().ravel()
-    s = sol['x'][params.size1():].full().ravel().reshape(-1, states.size1())
+    s = sol["x"][params.size1():].full().ravel().reshape(-1, states.size1())
     return p, s
 
 
 def plot(
     t_grid: np.ndarray,
-    # true: np.ndarray,
     meas: np.ndarray,
     est: np.ndarray,
     labels: List[str],
+    true: Optional[np.ndarray] = None,
     show_every=1,
-): 
-    idx = np.linspace(0, len(t_grid)-1, len(est), dtype=int)
+):
+    idx = np.linspace(0, len(t_grid) - 1, len(est), dtype=int)
     _, ax = plt.subplots()
     for i, lbl in enumerate(labels):
-        if lbl == 't':
+        base_color = plt.rcParams['axes.prop_cycle'].by_key()['color'][i]
+        if lbl == "t":
             continue
-        # ax.plot(t_grid, true[:, i], "--", label=f"{lbl} true")
-        ax.plot(t_grid[idx], est[:, i], label=f"{lbl} est")
-        ax.scatter(t_grid[::show_every], meas[::show_every, i], s=8, alpha=0.4)
-    ax.set(xlabel="time", ylabel="states", title="True vs Measured vs Estimated")
+        if true is not None:
+            ax.plot(t_grid, true[:, i], c=base_color, linestyle = "--", label=f"{lbl} true")
+        ax.plot(t_grid[idx], est[:, i], c=base_color, label=f"{lbl} est")
+        ax.scatter(t_grid[::show_every], meas[::show_every, i], s=8, alpha=0.4, c=base_color)
+    ax.set(xlabel="time", ylabel="states", title="Measured vs Estimated")
     ax.legend(ncol=3, fontsize="small")
     plt.tight_layout()
     # plt.savefig("result.svg")
