@@ -110,7 +110,9 @@ class ParameterEstimator:
         self.schur = self._has_hsl()
         # Placeholders (will be filled by _build_cnlls)
         self.x0 = None
-        self.cnlls = {"f": None, "x": None, "g": None}  # with g ≡ 0
+        self.errors = None
+        self.variables = None
+        self.constrain = None # ≡ 0
 
         self._build_cnlls()
 
@@ -137,9 +139,8 @@ class ParameterEstimator:
             "one_step_dt", [self.states, self.params, dt], [states_next]
         )
 
-        # Decision variables
+        # Shooting nodes
         Xv = cs.MX.sym("X", self.n_x, self.num_shooting)
-        variables = cs.veccat(self.params, Xv)
 
         # Map the integrator in parallel over all *N‑1* sampling intervals
         f_map = one_step_dt.map(self.N - 1, "thread")
@@ -181,13 +182,10 @@ class ParameterEstimator:
             gaps = X_pred - Xv[:, 1:]
             X_guess = cs.DM(self.x_meas).T
 
-        errors = cs.vec(cs.DM(self.x_meas[1:, :]).T - X_pred) # ((N‑1)*n_x, )
-        self.errors = errors
-        self.variables = variables
-
-        self.cnlls = {"x": variables, "f": self.residual(errors), "g": cs.vec(gaps)}
-        # Initial guess (flat vector)
         self.x0 = cs.veccat(self.p_init, X_guess)
+        self.errors = cs.vec(cs.DM(self.x_meas[1:, :]).T - X_pred)
+        self.variables = cs.veccat(self.params, Xv) # Decision variables
+        self.constrain = cs.vec(gaps) # ≡ 0
 
     def solve(self, strategy: str = "gn_fast") -> Dict[str, Any]:
         """
@@ -213,7 +211,15 @@ class ParameterEstimator:
         # if self.schur:
         #     options["ipopt.linear_solver"] = "ma27"
         options["ipopt.print_level"] = 0
-        solver = cs.nlpsol("solver", "ipopt", self.cnlls, options)
+        solver = cs.nlpsol(
+            "solver", "ipopt", 
+            {
+                "x": self.variables, 
+                "f": self.residual(self.errors), 
+                "g": self.constrain,
+            }, 
+            options,
+        )
         sol = solver(x0=self.x0, lbg=0, ubg=0)
         return sol
 
@@ -243,16 +249,20 @@ class ParameterEstimator:
         solver = cs.nlpsol(
             "solver",
             "ipopt",
-            self.cnlls,
+            {
+                "x": self.variables, 
+                "f": self.residual(self.errors), 
+                "g": self.constrain,
+            },
             options,
         )
         return solver(x0=self.x0, lbg=0, ubg=0)
 
     def _solve_gn(self) -> Dict[str, Any]:
         """Pure Gauss–Newton with in‑house QP and back‑tracking line‑search."""
-        w_sym = self.cnlls["x"]
-        f_sym = self.cnlls["f"]
-        g_sym = self.cnlls["g"]
+        w_sym = self.variables
+        f_sym = self.residual(self.errors)
+        g_sym = self.constrain
         nvar = w_sym.numel()
         ncons = g_sym.numel()
 
