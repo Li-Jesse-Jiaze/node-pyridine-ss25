@@ -14,7 +14,7 @@ import numpy as np
 # import csnlp
 # from matplotlib import pyplot as plt
 
-from .utils import silence, printyellow, printgreen, timed
+from .utils import silence, printyellow, printgreen, timed # noqa
 
 
 class ParameterEstimator:

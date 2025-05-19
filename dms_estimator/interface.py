@@ -125,7 +125,7 @@ def estimate(
     p_init: List[float],
     num_shooting,
     strategy: str = "ipopt",
-) -> np.ndarray:
+):
     est = ParameterEstimator(
         ode,
         states,
