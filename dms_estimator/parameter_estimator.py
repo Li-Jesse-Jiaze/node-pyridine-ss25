@@ -314,7 +314,9 @@ class ParameterEstimator:
 
             # Build GN system  H = JᵀJ , g = Jᵀr
             JR = JR_fun(w)
-            H = cs.triu(cs.mtimes(cs.transpose(JR), JR))
+            # BUG: Using cs.triu ???????
+            # H = cs.triu(cs.mtimes(cs.transpose(JR), JR))
+            H = cs.mtimes(cs.transpose(JR), JR)
             g = cs.mtimes(cs.transpose(JR), R_val)
 
             # Assemble QP matrices
