@@ -83,7 +83,7 @@ class ParameterEstimator:
         self.num_shooting = self.N if num_shooting is None else int(num_shooting)
         if self.num_shooting == self.N:
             printgreen(
-                f"Using the Default: #node=#meas={self.N};"
+                f"Using the default setting: #node=#meas={self.N};"
             )
         if self.num_shooting > self.N:
             printyellow(
