@@ -3,3 +3,4 @@ scipy==1.15.2
 matplotlib==3.10.1
 casadi==3.7.0
 jupyterlab
+ipywidgets
