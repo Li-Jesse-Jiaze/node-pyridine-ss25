@@ -12,8 +12,8 @@ cfg = dmse.ModelConfig(
     state_labels=list("ABCDEFG"),
 )
 
-num_meas = [50, 100, 500, 1000]
-num_mode = [10, 20, 50, 100, 500, 1000]
+num_meas = [100]
+num_mode = [100]
 
 for n_m in num_meas:
     for n_n in num_mode:
