@@ -1,5 +1,7 @@
 # node-pyridine-ss25
 
+See `demo.ipynb`
+
 ## Setup Environment
 
 Use `uv`:
