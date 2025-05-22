@@ -169,7 +169,7 @@ class ParameterEstimator:
                     else DT[i]
                 )
                 C[i] = cum
-
+            # TODO: should be mapaccum between shooting nodes unless cum is small enough
             X_pred = f_map(X0_steps, p_broadcast, C) # states at measurements
 
             # Continuity constraints
