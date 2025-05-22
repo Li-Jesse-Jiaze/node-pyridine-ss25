@@ -187,7 +187,16 @@ class ParameterEstimator:
             X_guess = cs.DM(self.x_meas).T
 
         self.x0 = cs.veccat(self.p_init, X_guess)
-        self.errors = cs.vec(cs.DM(self.x_meas[1:, :]).T - X_pred)
+        # Is there any error in the initial value
+        use_e0 = self.options.get("use_e0", False)
+        if use_e0:
+            self.errors = cs.veccat(
+                cs.DM(self.x_meas[0, :]) - Xv[:, 0],
+                cs.vec(cs.DM(self.x_meas[1:, :]).T - X_pred)
+            )
+        else:
+            self.errors = cs.vec(cs.DM(self.x_meas[1:, :]).T - X_pred)
+
         self.variables = cs.veccat(self.params, Xv) # Decision variables
         self.constrain = cs.vec(gaps) # ≡ 0
 
