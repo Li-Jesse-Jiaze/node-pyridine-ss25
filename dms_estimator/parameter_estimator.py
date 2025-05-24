@@ -1,5 +1,5 @@
 """
-Parameter estimation via constrained nonlinear least–squares (CNLLS)
+Parameter estimation via constrained nonlinear least-squares (CNLLS)
 using direct multiple-shooting and CasADi.
 
 Example:
@@ -18,12 +18,12 @@ from .utils import silence, printyellow, printgreen, timed # noqa
 
 
 class ParameterEstimator:
-    """CNLLS parameter estimation via direct multiple‑shooting.
+    """CNLLS parameter estimation via direct multiple-shooting.
 
     Parameters
     ----------
     ode
-        Continuous‑time right‑hand side *f(x, p) -> xdot*.
+        Continuous-time right-hand side *f(x, p) -> xdot*.
     states, params
         CasADi *MX* placeholders holding the symbols for **all** states / parameters.
     t_meas, x_meas
@@ -34,9 +34,9 @@ class ParameterEstimator:
         Initial guess for parameters *(n_p,)*.  If *None*, zeros are used.
     residual
         Mapping from the concatenated error vector to the scalar cost.
-        Defaults to ½‖e‖² (i.e. Gauss–Newton).
+        Defaults to ½‖e‖² (i.e. Gauss-Newton).
     options
-        Misc. solver options, e.g. *{"max_iter": 30, "tol": 1e‑10}*.
+        Misc. solver options, e.g. *{"max_iter": 30, "tol": 1e-10}*.
     """
 
     @staticmethod
@@ -54,7 +54,7 @@ class ParameterEstimator:
         """Whether HSL sparse linear solvers are available (e.g. *ma27*)."""
         if cs.Linsol.has_plugin("ma27"):
             return True
-        printyellow("HSL sparse linear solvers unavailable; falling back to built‑ins.")
+        printyellow("HSL sparse linear solvers unavailable; falling back to built-ins.")
         return False
 
     def __init__(
@@ -127,11 +127,11 @@ class ParameterEstimator:
             • g ≡ 0
             • r_2, r_3 ≡ 0
         """
-        # Pre‑compute Δt between measurements
-        dt_meas = np.diff(self.t_meas).astype(float)  # (N‑1, )
+        # Pre-compute Δt between measurements
+        dt_meas = np.diff(self.t_meas).astype(float)  # (N-1, )
         DT = cs.DM(dt_meas)
 
-        # One‑step RK4 integrator
+        # One-step RK4 integrator
         dt = cs.MX.sym("dt")
         k1 = self.ode(self.states, self.params)
         k2 = self.ode(self.states + dt / 2 * k1, self.params)
@@ -146,7 +146,7 @@ class ParameterEstimator:
         # Shooting nodes
         Xv = cs.MX.sym("X", self.n_x, self.num_shooting)
 
-        # Map the integrator in parallel over all *N‑1* sampling intervals
+        # Map the integrator in parallel over all *N-1* sampling intervals
         f_map = one_step_dt.map(self.N - 1, "thread")
         p_broadcast = cs.repmat(self.params, 1, self.N - 1)  # shared params
         if self.less_node:
@@ -216,7 +216,7 @@ class ParameterEstimator:
 
     @silence
     def _solve_ipopt(self) -> Dict[str, Any]:
-        """Full‑space IPOPT (exact Hessian or L-BFGS?)."""
+        """Full-space IPOPT (exact Hessian or L-BFGS?)."""
         options = dict()
         # # Faster without
         # options["jit"] = self.with_jit
@@ -238,13 +238,13 @@ class ParameterEstimator:
 
     @silence
     def _solve_gn_fast(self) -> Dict[str, Any]:
-        """IPOPT with user‑supplied Hessian callback"""
+        """IPOPT with user-supplied Hessian callback"""
         # Jacobian of residuals wrt *all* decision vars
         J = cs.jacobian(self.errors, self.variables)
         # # Plot H
         # csnlp.util.plot.spy(cs.mtimes(J.T, J))
         # plt.savefig("H.svg")
-        # Upper‑triangular part of JᵀJ
+        # Upper-triangular part of JᵀJ
         H = cs.triu(cs.mtimes(J.T, J))
         sigma = cs.MX.sym("sigma") # IPOPT multiplies Hessian by *lam_f*
         hessLag = cs.Function(
@@ -272,7 +272,7 @@ class ParameterEstimator:
         return solver(x0=self.x0, lbg=0, ubg=0)
 
     def _solve_gn(self) -> Dict[str, Any]:
-        """Pure Gauss–Newton with in‑house QP and back‑tracking line‑search."""
+        """Pure Gauss-Newton with in-house QP and back-tracking line-search."""
         w_sym = self.variables
         f_sym = self.residual(self.errors)
         g_sym = self.constrain
@@ -315,7 +315,7 @@ class ParameterEstimator:
             sol = solver(lbg=lbA_, ubg=ubA_)
             return sol["x"].full().ravel()
 
-        # Gauss–Newton loop
+        # Gauss-Newton loop
         max_iter = self.options.get("max_iter", 20)
         tol = self.options.get("tol", 1e-12)
         w = cs.DM(self.x0)
