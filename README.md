@@ -14,7 +14,8 @@ source .venv/bin/activate
 uv pip install -r requirements.txt
 ```
 
-(Optional) Add `HSL`
+<details>
+<summary>(Optional) Add `HSL`</summary>
 
 ```shell
 git clone https://github.com/coin-or-tools/ThirdParty-HSL.git
@@ -60,3 +61,5 @@ Add this line to `.venv/bin/activate`
 ```shell
 export LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
 ```
+
+</details>
